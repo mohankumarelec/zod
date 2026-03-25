@@ -1445,11 +1445,19 @@ export interface ZodTuple<
 > extends _ZodType<core.$ZodTupleInternals<T, Rest>>,
     core.$ZodTuple<T, Rest> {
   "~standard": ZodStandardSchemaWithJSON<this>;
+  min(minLength: number, params?: string | core.$ZodCheckMinLengthParams): this;
+  nonempty(params?: string | core.$ZodCheckMinLengthParams): this;
+  max(maxLength: number, params?: string | core.$ZodCheckMaxLengthParams): this;
+  length(len: number, params?: string | core.$ZodCheckLengthEqualsParams): this;
   rest<Rest extends core.SomeType = core.$ZodType>(rest: Rest): ZodTuple<T, Rest>;
 }
 export const ZodTuple: core.$constructor<ZodTuple> = /*@__PURE__*/ core.$constructor("ZodTuple", (inst, def) => {
   core.$ZodTuple.init(inst, def);
   ZodType.init(inst, def);
+  inst.min = (minLength, params) => inst.check(checks.minLength(minLength, params));
+  inst.nonempty = (params) => inst.check(checks.minLength(1, params));
+  inst.max = (maxLength, params) => inst.check(checks.maxLength(maxLength, params));
+  inst.length = (len, params) => inst.check(checks.length(len, params));
   inst._zod.processJSONSchema = (ctx, json, params) => processors.tupleProcessor(inst, ctx, json, params);
   inst.rest = (rest) =>
     inst.clone({

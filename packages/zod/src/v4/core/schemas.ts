@@ -21,7 +21,7 @@ export interface ParseContext<T extends errors.$ZodIssueBase = never> {
   /** Skip eval-based fast path. Default `false`. */
   readonly jitless?: boolean;
   /** Abort validation after the first error. Default `false`. */
-  // readonly abortEarly?: boolean;
+  readonly abortEarly?: boolean;
 }
 
 /** @internal */
@@ -216,6 +216,10 @@ export const $ZodType: core.$constructor<$ZodType> = /*@__PURE__*/ core.$constru
       ctx?: ParseContextInternal | undefined
     ): util.MaybeAsync<ParsePayload> => {
       let isAborted = util.aborted(payload);
+      if (ctx?.abortEarly && payload.issues.length) {
+        isAborted = true;
+        payload.aborted = true;
+      }
 
       let asyncResult!: Promise<unknown> | undefined;
       for (const ch of checks) {
@@ -237,12 +241,18 @@ export const $ZodType: core.$constructor<$ZodType> = /*@__PURE__*/ core.$constru
             await _;
             const nextLen = payload.issues.length;
             if (nextLen === currLen) return;
-            if (!isAborted) isAborted = util.aborted(payload, currLen);
+            if (ctx?.abortEarly) {
+              isAborted = true;
+              payload.aborted = true;
+            } else if (!isAborted) isAborted = util.aborted(payload, currLen);
           });
         } else {
           const nextLen = payload.issues.length;
           if (nextLen === currLen) continue;
-          if (!isAborted) isAborted = util.aborted(payload, currLen);
+          if (ctx?.abortEarly) {
+            isAborted = true;
+            payload.aborted = true;
+          } else if (!isAborted) isAborted = util.aborted(payload, currLen);
         }
       }
 
@@ -2118,6 +2128,38 @@ function handleUnionResults(results: ParsePayload[], final: ParsePayload, inst: 
   return final;
 }
 
+function detectTupleDiscriminator(options: readonly SomeType[]): { map: Map<util.Primitive, $ZodTuple> } | null {
+  // Skip optimization if there are fewer than 3 options
+  if (options.length < 3) return null;
+
+  const tuples: $ZodTuple[] = [];
+  for (const option of options) {
+    if (option._zod.def.type === "tuple") tuples.push(option as $ZodTuple);
+  }
+
+  // Skip optimization if there are fewer than 2 tuple options
+  if (tuples.length < 2) return null;
+  const map = new Map<util.Primitive, $ZodTuple>();
+
+  for (const tuple of tuples) {
+    const items = tuple._zod.def.items;
+    // Skip if the tuple has no discriminative values
+    if (!items?.length) return null;
+
+    const values = items[0]._zod.values;
+    // Skip if the first item has no discriminative values
+    if (!values?.size) return null;
+
+    for (const value of values) {
+      // Skip if a value maps to multiple tuples
+      if (map.has(value)) return null;
+      map.set(value, tuple);
+    }
+  }
+
+  return { map };
+}
+
 export const $ZodUnion: core.$constructor<$ZodUnion> = /*@__PURE__*/ core.$constructor("$ZodUnion", (inst, def) => {
   $ZodType.init(inst, def);
 
@@ -2146,6 +2188,7 @@ export const $ZodUnion: core.$constructor<$ZodUnion> = /*@__PURE__*/ core.$const
 
   const single = def.options.length === 1;
   const first = def.options[0]._zod.run;
+  const tupleDisc = util.cached(() => detectTupleDiscriminator(def.options));
 
   inst._zod.parse = (payload, ctx) => {
     if (single) {
@@ -2154,7 +2197,27 @@ export const $ZodUnion: core.$constructor<$ZodUnion> = /*@__PURE__*/ core.$const
     let async = false;
 
     const results: util.MaybeAsync<ParsePayload>[] = [];
+    const disc = tupleDisc.value;
+    const opt = Array.isArray(payload.value) ? disc?.map.get(payload.value[0]) : undefined;
+
+    if (Array.isArray(payload.value) && disc && !opt) {
+      results.push({
+        issues: [
+          {
+            code: "invalid_value",
+            message: "Expected a valid tuple discriminator value",
+            input: payload.value,
+            inst,
+            path: [0],
+            values: Array.from(disc.map.keys()),
+          },
+        ],
+        value: payload.value,
+      });
+    }
+
     for (const option of def.options) {
+      if (Array.isArray(payload.value) && disc && opt !== option) continue;
       const result = option._zod.run(
         {
           value: payload.value,

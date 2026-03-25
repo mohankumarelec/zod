@@ -217,3 +217,59 @@ test("z.xor() type inference", () => {
   type Result = z.infer<typeof schema>;
   expectTypeOf<Result>().toEqualTypeOf<string | number | boolean>();
 });
+
+test("tuple union optimizer - deep nested recursive schema", () => {
+  const schema: z.ZodType<any> = z.lazy(() =>
+    z.union([...[...Array(1000).keys()].map((i) => z.tuple([z.literal(`key-${i}`), schema])), z.string()])
+  );
+
+  let data: unknown = "leaf-value";
+  for (let i = 0; i < 1000; i++) {
+    data = [`key-${i % 1000}`, data];
+  }
+
+  const result = schema.parse(data);
+  expect(result).toBeDefined();
+});
+
+test("tuple union optimizer - large nested tuples with string and number primitive arms", () => {
+  const depth = 1000;
+  const schema: z.ZodType<any> = z.lazy(() =>
+    z.union([...[...Array(depth).keys()].map((i) => z.tuple([z.literal(`key-${i}`), schema])), z.string(), z.number()])
+  );
+
+  let stringNest: unknown = "leaf-string";
+  for (let i = 0; i < depth; i++) {
+    stringNest = [`key-${i % depth}`, stringNest];
+  }
+  expect(schema.parse(stringNest)).toEqual(stringNest);
+
+  let numberNest: unknown = 42;
+  for (let i = 0; i < depth; i++) {
+    numberNest = [`key-${i % depth}`, numberNest];
+  }
+  expect(schema.parse(numberNest)).toEqual(numberNest);
+
+  expect(schema.parse("shallow-string")).toBe("shallow-string");
+  expect(schema.parse(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+});
+
+test("tuple union optimizer - invalid tuple tag with mixed primitive arms", () => {
+  const depth = 100;
+  const schema: z.ZodType<any> = z.lazy(() =>
+    z.union([...[...Array(depth).keys()].map((i) => z.tuple([z.literal(`key-${i}`), schema])), z.string(), z.number()])
+  );
+
+  const badTag: unknown = ["unknown-discriminator", "x"];
+  const result = schema.safeParse(badTag);
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    expect(issue.code).toBe("invalid_union");
+    if (issue.code === "invalid_union") {
+      const nested = issue.errors.flat()[0];
+      expect(nested.code).toBe("invalid_value");
+      expect(nested.path).toEqual([0]);
+    }
+  }
+});

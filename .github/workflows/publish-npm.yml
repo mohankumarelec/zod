@@ -1,0 +1,54 @@
+# Publishes @mohankumarelec/zod to the public npm registry (registry.npmjs.org).
+#
+# Required GitHub secret (repo: Settings → Secrets and variables → Actions):
+#   NPM_TOKEN — npm automation token with permission to publish to the @mohankumarelec org
+#   (create at https://www.npmjs.com/settings/~/tokens — "Granular access token" with
+#   Packages read/write for scope @mohankumarelec, or a classic token with publish rights).
+
+name: Publish to npm
+
+on:
+  push:
+    branches:
+      - optimized
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+
+      - run: pnpm install
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm run --filter @zod/resolution test:all
+
+      - run: pnpm run prepublishOnly
+        working-directory: ./packages/zod
+
+      # Scoped npm name for @mohankumarelec; keep repo package.json as "zod" so TS subpaths (zod/v3, etc.) keep working.
+      - name: Scope package for npm (@mohankumarelec)
+        working-directory: ./packages/zod
+        run: |
+          npm pkg set "name=@mohankumarelec/zod"
+          npm pkg set "publishConfig.access=public"
+
+      - name: Publish to npm
+        uses: JS-DevTools/npm-publish@v3
+        with:
+          token: ${{ secrets.NPM_TOKEN }}
+          provenance: true
+          package: ./packages/zod
